@@ -8,6 +8,7 @@ from dvdcompare.parser import (
     parse_feature_line,
     parse_film_page,
     parse_runtime,
+    parse_search_results,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -179,6 +180,23 @@ class TestParseExtras:
         assert discs[0].is_film is True
         assert discs[1].format == "Blu-ray"
         assert discs[1].is_film is True
+
+    def test_asterisk_variant_with_suffix(self):
+        """Asterisk film markers with variant titles set is_film and keep the feature."""
+        html = (
+            '<b>DISC ONE (Blu-ray 4K)</b><br>'
+            '*The Film - Theatrical Cut (2:15:07)<br>'
+            '<b>DISC TWO (Blu-ray)</b><br>'
+            '* The Film - US TV Cut (1080p/English DTS 5.1)<br>'
+        )
+        discs = parse_extras(html)
+        assert discs[0].is_film is True
+        assert len(discs[0].features) == 1
+        assert discs[0].features[0].title == "The Film - Theatrical Cut"
+        assert discs[0].features[0].runtime_seconds == 2 * 3600 + 15 * 60 + 7
+        assert discs[1].is_film is True
+        assert len(discs[1].features) == 1
+        assert discs[1].features[0].title == 'The Film - US TV Cut (1080p/English DTS 5.1)'
 
 
 # ---------------------------------------------------------------------------
@@ -549,3 +567,49 @@ class TestParseFilmPagePlanetEarth:
         assert ep.runtime_seconds == 115 * 60 + 1
         assert ep.children[1].title == "Heroes"
         assert ep.children[1].runtime_seconds == 57 * 60 + 49
+
+
+# ---------------------------------------------------------------------------
+# parse_search_results
+# ---------------------------------------------------------------------------
+
+
+class TestParseSearchResults:
+    def test_multi_result_links(self):
+        html = """<html><body>
+        <a href="film.php?fid=100">Film A (2020)</a>
+        <a href="film.php?fid=200">Film B (2021)</a>
+        </body></html>"""
+        results = parse_search_results(html)
+        assert len(results) == 2
+        assert results[0].film_id == 100
+        assert results[1].film_id == 200
+
+    def test_js_redirect_single_result(self):
+        html = """<html><body>
+        <SCRIPT LANGUAGE="Javascript">
+        <!--
+        location.href="film.php?fid=23028";
+        //--></SCRIPT>
+        <h2>Search results for <i>X-Men The Animated Series</i></h2>
+        </body></html>"""
+        results = parse_search_results(html)
+        assert len(results) == 1
+        assert results[0].film_id == 23028
+        assert results[0].title == "X-Men The Animated Series"
+        assert "fid=23028" in results[0].url
+
+    def test_js_redirect_not_used_when_links_present(self):
+        html = """<html><body>
+        <SCRIPT>location.href="film.php?fid=999";</SCRIPT>
+        <a href="film.php?fid=100">Film A</a>
+        </body></html>"""
+        results = parse_search_results(html)
+        assert len(results) == 1
+        assert results[0].film_id == 100
+
+    def test_no_results(self):
+        html = """<html><body><h2>Search results</h2>
+        Found 0 result(s).</body></html>"""
+        results = parse_search_results(html)
+        assert results == []

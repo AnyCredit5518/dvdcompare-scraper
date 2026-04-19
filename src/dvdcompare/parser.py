@@ -140,22 +140,33 @@ def parse_extras(extras_html: str) -> list[Disc]:
         if not line:
             continue
 
-        # Disc header: DISC ONE (Blu-ray 4K)
-        disc_match = re.match(r"^DISC\s+(\w+)\s+\((.+)\)$", line)
+        # Disc header: DISC ONE (Blu-ray 4K)  or  DISC ONE
+        disc_match = re.match(r"^DISC\s+(\w+)(?:\s+\((.+)\))?$", line)
         if disc_match:
             current_disc = Disc(
                 number=_disc_number(disc_match.group(1)),
-                format=disc_match.group(2),
+                format=disc_match.group(2) or "",
             )
             discs.append(current_disc)
             current_group = None
             continue
 
-        # "* The Film" marker
-        if line == "* The Film":
-            if current_disc:
+        # "* The Film" marker (possibly with a variant title suffix).
+        # dvdcompare uses a leading asterisk to flag the main feature.
+        if line.startswith("*"):
+            stripped = line.lstrip("*").strip()
+            is_film_marker = (
+                not stripped  # bare "*"
+                or stripped.lower().startswith("the film")
+            )
+            if is_film_marker and current_disc:
                 current_disc.is_film = True
-            continue
+            # Exact "* The Film" (no extra info) -> skip entirely
+            if not stripped or stripped.lower() == "the film":
+                continue
+            # Otherwise strip the asterisk and keep as a feature
+            line = stripped
+            # fall through to feature parsing below
 
         if current_disc is None:
             continue
@@ -290,7 +301,12 @@ def parse_film_page(html: str) -> FilmComparison:
 
 
 def parse_search_results(html: str) -> list[SearchResult]:
-    """Parse a dvdcompare.net search results page."""
+    """Parse a dvdcompare.net search results page.
+
+    When the search returns exactly one hit, dvdcompare emits a JavaScript
+    redirect (``location.href="film.php?fid=..."``)) instead of a clickable
+    ``<a>`` tag.  This function handles both cases.
+    """
     soup = BeautifulSoup(html, "html.parser")
     results: list[SearchResult] = []
     seen: set[int] = set()
@@ -312,5 +328,24 @@ def parse_search_results(html: str) -> list[SearchResult]:
             href = f"https://www.dvdcompare.net/comparisons/{href}"
 
         results.append(SearchResult(title=text, url=href, film_id=film_id))
+
+    # Single-result pages use a JS redirect instead of <a> links.
+    if not results:
+        for script in soup.find_all("script"):
+            content = script.string or ""
+            m = re.search(
+                r'location\.href\s*=\s*"(film\.php\?fid=(\d+))"', content
+            )
+            if m:
+                fid = int(m.group(2))
+                href = f"https://www.dvdcompare.net/comparisons/{m.group(1)}"
+                # Try to grab the title from the <h2> nearby.
+                h2 = soup.find("h2")
+                title = ""
+                if h2:
+                    italic = h2.find("i")
+                    title = italic.get_text(strip=True) if italic else h2.get_text(strip=True)
+                results.append(SearchResult(title=title, url=href, film_id=fid))
+                break
 
     return results
