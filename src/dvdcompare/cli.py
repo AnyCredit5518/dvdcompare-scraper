@@ -12,7 +12,10 @@ from .scraper import get_film, get_film_by_url, search
 
 
 def select_releases(releases: list[Release], selector: str) -> list[Release]:
-    """Filter releases by 1-based index or case-insensitive name substring."""
+    """Filter releases by 1-based index or case-insensitive name substring.
+
+    Raises LookupError if no release matches the selector.
+    """
     try:
         idx = int(selector) - 1
         idx = min(idx, len(releases) - 1)
@@ -25,11 +28,10 @@ def select_releases(releases: list[Release], selector: str) -> list[Release]:
     if matched:
         return matched
 
-    print("No release matching '{}'.".format(selector), file=sys.stderr)
-    print("Available releases:", file=sys.stderr)
-    for i, r in enumerate(releases, 1):
-        print(f"  {i}. {r.name}", file=sys.stderr)
-    sys.exit(1)
+    names = "\n".join(f"  {i}. {r.name}" for i, r in enumerate(releases, 1))
+    raise LookupError(
+        f"No release matching '{selector}'.\nAvailable releases:\n{names}"
+    )
 
 
 def main() -> None:
