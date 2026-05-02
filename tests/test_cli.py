@@ -48,6 +48,5 @@ class TestSelectReleases:
         assert len(result) == 2
 
     def test_keyword_no_match_exits(self, releases):
-        with pytest.raises(SystemExit) as exc_info:
+        with pytest.raises(LookupError, match="No release matching"):
             select_releases(releases, "nonexistent")
-        assert exc_info.value.code == 1

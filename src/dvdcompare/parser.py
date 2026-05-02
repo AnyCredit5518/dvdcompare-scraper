@@ -300,6 +300,31 @@ def parse_film_page(html: str) -> FilmComparison:
     )
 
 
+_YEAR_RE = re.compile(r"\((\d{4})\)\s*$")
+_FORMAT_RE = re.compile(r"\(([^()]+)\)\s+\(\d{4}\)\s*$")
+
+_KNOWN_FORMATS = {"blu-ray", "blu-ray 4k", "dvd", "hd dvd", "hd-dvd"}
+
+
+def _extract_year(title: str) -> int | None:
+    """Extract a trailing (YYYY) year from a search result title."""
+    m = _YEAR_RE.search(title)
+    return int(m.group(1)) if m else None
+
+
+def _extract_format(title: str) -> str | None:
+    """Extract a disc format from a search result title.
+
+    Titles look like ``"King Kong (Blu-ray 4K)  (2005)"`` where the
+    format is in parentheses before the year.  Only returns values that
+    match known disc format strings.
+    """
+    m = _FORMAT_RE.search(title)
+    if m and m.group(1).strip().lower() in _KNOWN_FORMATS:
+        return m.group(1).strip()
+    return None
+
+
 def parse_search_results(html: str) -> list[SearchResult]:
     """Parse a dvdcompare.net search results page.
 
@@ -327,7 +352,10 @@ def parse_search_results(html: str) -> list[SearchResult]:
         if not href.startswith("http"):
             href = f"https://www.dvdcompare.net/comparisons/{href}"
 
-        results.append(SearchResult(title=text, url=href, film_id=film_id))
+        results.append(SearchResult(
+            title=text, url=href, film_id=film_id,
+            year=_extract_year(text), disc_format=_extract_format(text),
+        ))
 
     # Single-result pages use a JS redirect instead of <a> links.
     if not results:
@@ -345,7 +373,10 @@ def parse_search_results(html: str) -> list[SearchResult]:
                 if h2:
                     italic = h2.find("i")
                     title = italic.get_text(strip=True) if italic else h2.get_text(strip=True)
-                results.append(SearchResult(title=title, url=href, film_id=fid))
+                results.append(SearchResult(
+                    title=title, url=href, film_id=fid,
+                    year=_extract_year(title), disc_format=_extract_format(title),
+                ))
                 break
 
     return results

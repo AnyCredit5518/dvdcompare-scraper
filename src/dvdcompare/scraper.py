@@ -36,13 +36,16 @@ async def find_film(
     title: str,
     disc_format: str | None = None,
     *,
+    year: int | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> FilmComparison:
     """Search for a title and return the best-matching FilmComparison.
 
-    If *disc_format* is provided (e.g. ``"Blu-ray 4K"``), results whose
-    title contains that format string are preferred.  Falls back to the
-    first result when no format-specific match exists.
+    If *year* is provided, results matching that year are strongly
+    preferred.  If *disc_format* is provided (e.g. ``"Blu-ray 4K"``),
+    results whose title contains that format string are preferred.
+    When both are given, year+format matches rank highest, then
+    year-only, then format-only, then first result.
 
     Raises ``LookupError`` if no search results are found.
     """
@@ -50,14 +53,17 @@ async def find_film(
     if not results:
         raise LookupError(f"No dvdcompare results for '{title}'")
 
-    best = results[0]
-    if disc_format:
-        fmt_lower = disc_format.lower()
-        for r in results:
-            if fmt_lower in r.title.lower():
-                best = r
-                break
+    fmt_lower = disc_format.lower() if disc_format else None
 
+    def _score(r: SearchResult) -> int:
+        s = 0
+        if year and r.year == year:
+            s += 2
+        if fmt_lower and r.disc_format and fmt_lower == r.disc_format.lower():
+            s += 1
+        return s
+
+    best = max(results, key=_score)
     return await get_film(best.film_id, client=client)
 
 

@@ -3,6 +3,8 @@ from pathlib import Path
 import pytest
 
 from dvdcompare.parser import (
+    _extract_format,
+    _extract_year,
     format_runtime,
     parse_extras,
     parse_feature_line,
@@ -516,6 +518,51 @@ class TestParseFilmPagePlanetEarth:
         assert making.title == "Making of Planet Earth III"
         assert making.feature_type == "behind-the-scenes montage"
         assert making.runtime_seconds == 54 * 60 + 15
+
+
+# ---------------------------------------------------------------------------
+# _extract_year / _extract_format
+# ---------------------------------------------------------------------------
+
+
+class TestExtractYear:
+    def test_trailing_year(self):
+        assert _extract_year("King Kong                         (2005)") == 2005
+
+    def test_format_and_year(self):
+        assert _extract_year("King Kong (Blu-ray 4K)                           (2005)") == 2005
+
+    def test_no_year(self):
+        assert _extract_year("King Kong") is None
+
+    def test_year_in_middle_ignored(self):
+        # Year must be at the end
+        assert _extract_year("King Kong (2005) extras") is None
+
+
+class TestExtractFormat:
+    def test_bluray_4k(self):
+        assert _extract_format("King Kong (Blu-ray 4K)                           (2005)") == "Blu-ray 4K"
+
+    def test_bluray(self):
+        assert _extract_format("King Kong (Blu-ray)                              (2005)") == "Blu-ray"
+
+    def test_dvd(self):
+        assert _extract_format("King Kong (DVD)                                  (2005)") == "DVD"
+
+    def test_hd_dvd(self):
+        assert _extract_format("King Kong (HD DVD)                               (2005)") == "HD DVD"
+
+    def test_no_format(self):
+        assert _extract_format("King Kong                         (2005)") is None
+
+    def test_non_format_parens_ignored(self):
+        # "(TV)" is not a known format
+        assert _extract_format("King of Christmas (The) AKA Julekongen (TV)  (2012)") is None
+
+
+class TestParseFilmPagePlanetEarthDiscs:
+    """Remaining Planet Earth disc tests (continuation)."""
 
     def test_disc_four_bluray_mins(self, planet_earth_html):
         film = parse_film_page(planet_earth_html)

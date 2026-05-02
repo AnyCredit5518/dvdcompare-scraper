@@ -56,3 +56,5 @@ class SearchResult:
     title: str
     url: str
     film_id: int | None = None
+    year: int | None = None
+    disc_format: str | None = None
