@@ -200,6 +200,33 @@ class TestParseExtras:
         assert len(discs[1].features) == 1
         assert discs[1].features[0].title == 'The Film - US TV Cut (1080p/English DTS 5.1)'
 
+    def test_multi_dash_nesting_stripped(self):
+        """Double/triple-dash nesting prefixes are stripped and become children."""
+        html = (
+            '<b>DISC ONE (Blu-ray)</b><br>'
+            'Production Diaries (480i):<br>'
+            '-- Production Diaries by Date<br>'
+            '--- Play All (3:50:18)<br>'
+            '--- Day 1: Welcome (0:33)<br>'
+            '--- Day 2: The Set (1:05)<br>'
+        )
+        discs = parse_extras(html)
+        disc = discs[0]
+        group = disc.features[0]
+        assert group.title == "Production Diaries (480i)"
+        # All dash-prefixed lines become children of the group
+        assert len(group.children) == 4
+        assert group.children[0].title == "Production Diaries by Date"
+        assert group.children[1].title == "Play All"
+        assert group.children[1].runtime_seconds == 3 * 3600 + 50 * 60 + 18
+        assert group.children[2].title == "Day 1: Welcome"
+        assert group.children[2].runtime_seconds == 33
+        assert group.children[3].title == "Day 2: The Set"
+        assert group.children[3].runtime_seconds == 65
+        # No leading dashes in any title
+        for child in group.children:
+            assert not child.title.startswith("-")
+
 
 # ---------------------------------------------------------------------------
 # parse_film_page  (full integration with fixture)

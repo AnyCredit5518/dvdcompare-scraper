@@ -171,9 +171,10 @@ def parse_extras(extras_html: str) -> list[Disc]:
         if current_disc is None:
             continue
 
-        # Sub-feature (starts with "- ")
-        if line.startswith("- "):
-            feature = parse_feature_line(line[2:])
+        # Sub-feature (starts with one or more "- " dash prefixes for nesting)
+        dash_match = re.match(r"^(-{1,3})\s+", line)
+        if dash_match:
+            feature = parse_feature_line(line[dash_match.end():])
             if current_group:
                 current_group.children.append(feature)
             else:
