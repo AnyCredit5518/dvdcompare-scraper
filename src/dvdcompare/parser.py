@@ -159,7 +159,12 @@ def parse_extras(extras_html: str) -> list[Disc]:
                 not stripped  # bare "*"
                 or stripped.lower().startswith("the film")
             )
-            if is_film_marker and current_disc:
+            # Create a default disc if none exists yet (single-disc pages
+            # omit the DISC header entirely).
+            if is_film_marker and current_disc is None:
+                current_disc = Disc(number=1, format="", is_film=True)
+                discs.append(current_disc)
+            elif is_film_marker and current_disc:
                 current_disc.is_film = True
             # Exact "* The Film" (no extra info) -> skip entirely
             if not stripped or stripped.lower() == "the film":
@@ -168,8 +173,11 @@ def parse_extras(extras_html: str) -> list[Disc]:
             line = stripped
             # fall through to feature parsing below
 
+        # Single-disc pages omit the DISC header — create a default disc
+        # the first time we encounter a feature line.
         if current_disc is None:
-            continue
+            current_disc = Disc(number=1, format="")
+            discs.append(current_disc)
 
         # Sub-feature (starts with one or more "- " dash prefixes for nesting)
         dash_match = re.match(r"^(-{1,3})\s+", line)
