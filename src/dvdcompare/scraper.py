@@ -12,13 +12,16 @@ _HEADERS = {
 }
 
 
+_TIMEOUT = httpx.Timeout(15.0)  # 15s connect + read timeout
+
+
 async def search(
     query: str, *, client: httpx.AsyncClient | None = None
 ) -> list[SearchResult]:
     """Search dvdcompare.net for a film title."""
     own_client = client is None
     if own_client:
-        client = httpx.AsyncClient(headers=_HEADERS)
+        client = httpx.AsyncClient(headers=_HEADERS, timeout=_TIMEOUT)
     try:
         resp = await client.post(
             f"{BASE_URL}/comparisons/search.php",
@@ -81,7 +84,7 @@ async def get_film_by_url(
     """Fetch and parse a film comparison page by full URL."""
     own_client = client is None
     if own_client:
-        client = httpx.AsyncClient(headers=_HEADERS)
+        client = httpx.AsyncClient(headers=_HEADERS, timeout=_TIMEOUT)
     try:
         resp = await client.get(url, follow_redirects=True)
         resp.raise_for_status()
