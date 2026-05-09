@@ -1,6 +1,8 @@
 # dvdcompare-scraper
 
-Scrape disc extras metadata from [dvdcompare.net](https://www.dvdcompare.net).
+Python client for looking up disc content metadata from [dvdcompare.net](https://www.dvdcompare.net) — an invaluable resource for the physical media community that catalogs per-disc content breakdowns across regional releases.
+
+> **Disclaimer**: This project is not affiliated with dvdcompare.net. All disc content data is owned by and sourced from [dvdcompare.net](https://www.dvdcompare.net). Please use responsibly and respect their servers.
 
 ## Install
 

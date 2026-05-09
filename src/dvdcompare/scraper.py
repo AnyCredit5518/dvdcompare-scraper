@@ -8,7 +8,7 @@ from .parser import parse_film_page, parse_search_results
 BASE_URL = "https://www.dvdcompare.net"
 
 _HEADERS = {
-    "User-Agent": "dvdcompare-scraper/0.1 (disc extras lookup)",
+    "User-Agent": "dvdcompare-scraper/0.1 (https://github.com/AnyCredit5518/dvdcompare-scraper; disc content lookup)",
 }
 
 
