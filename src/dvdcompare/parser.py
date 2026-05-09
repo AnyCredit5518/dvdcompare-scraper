@@ -203,8 +203,17 @@ def parse_extras(extras_html: str) -> list[Disc]:
     return discs
 
 
-def parse_film_page(html: str) -> FilmComparison:
+def _detect_charset(raw: bytes) -> str | None:
+    """Sniff charset from an HTML meta tag in the first 2 KB."""
+    m = re.search(rb'charset=(["\']?)([^"\'\s;>]+)\1', raw[:2048])
+    return m.group(2).decode("ascii") if m else None
+
+
+def parse_film_page(html: str | bytes) -> FilmComparison:
     """Parse a dvdcompare.net film comparison page into a :class:`FilmComparison`."""
+    if isinstance(html, bytes):
+        charset = _detect_charset(html) or "utf-8"
+        html = html.decode(charset, errors="replace")
     soup = BeautifulSoup(html, "html.parser")
 
     # --- Title, format, year from <h2> ---

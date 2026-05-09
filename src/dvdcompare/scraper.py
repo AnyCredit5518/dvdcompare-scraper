@@ -85,7 +85,7 @@ async def get_film_by_url(
     try:
         resp = await client.get(url, follow_redirects=True)
         resp.raise_for_status()
-        return parse_film_page(resp.text)
+        return parse_film_page(resp.content)
     finally:
         if own_client:
             await client.aclose()
