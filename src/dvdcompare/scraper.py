@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 
 import httpx
 
@@ -69,7 +70,7 @@ async def find_film(
         return s
 
     best = max(results, key=_score)
-    await asyncio.sleep(1.0)  # rate-limit: 1s delay between requests
+    await asyncio.sleep(2.0 + random.uniform(0, 1.0))  # rate-limit
     return await get_film(best.film_id, client=client)
 
 
