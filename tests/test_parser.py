@@ -183,6 +183,45 @@ class TestParseExtras:
         assert discs[1].format == "Blu-ray"
         assert discs[1].is_film is True
 
+    def test_quoted_title_disc_headers(self):
+        """Boxset variant: DISC ONE \"Film Title\" (Format) splits into discs."""
+        html = (
+            '<b>DISC ONE "Back to the Future" (Blu-ray 4K)</b><br>'
+            '* The Film<br>'
+            'Audio Commentary by Director (1:56:00)<br>'
+            '<b>DISC TWO "Back to the Future" (Blu-ray)</b><br>'
+            '* The Film<br>'
+            '<b>DISC THREE "Back to the Future Part II" (Blu-ray 4K)</b><br>'
+            '* The Film<br>'
+        )
+        discs = parse_extras(html)
+        assert len(discs) == 3
+        assert discs[0].number == 1
+        assert discs[0].format == "Blu-ray 4K"
+        assert discs[0].title == "Back to the Future"
+        assert discs[0].is_film is True
+        assert len(discs[0].features) == 1
+        assert discs[0].features[0].title == "Audio Commentary by Director"
+        assert discs[1].number == 2
+        assert discs[1].format == "Blu-ray"
+        assert discs[1].title == "Back to the Future"
+        assert discs[2].number == 3
+        assert discs[2].title == "Back to the Future Part II"
+
+    def test_outer_disc_header_replaced_by_quoted_variant(self):
+        """An empty placeholder ``DISC ONE`` is replaced by the inline quoted variant."""
+        html = (
+            '<b>DISC ONE</b><br>'
+            '<b>DISC ONE "Back to the Future" (Blu-ray 4K)</b><br>'
+            '* The Film<br>'
+        )
+        discs = parse_extras(html)
+        assert len(discs) == 1
+        assert discs[0].number == 1
+        assert discs[0].format == "Blu-ray 4K"
+        assert discs[0].title == "Back to the Future"
+        assert discs[0].is_film is True
+
     def test_asterisk_variant_with_suffix(self):
         """Asterisk film markers with variant titles set is_film and keep the feature."""
         html = (

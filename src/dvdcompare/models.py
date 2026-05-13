@@ -23,6 +23,7 @@ class Disc:
     number: int
     format: str
     is_film: bool = False
+    title: str = ""
     features: list[Feature] = field(default_factory=list)
 
 

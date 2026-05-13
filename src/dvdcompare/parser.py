@@ -141,13 +141,32 @@ def parse_extras(extras_html: str) -> list[Disc]:
             continue
 
         # Disc header: DISC ONE (Blu-ray 4K)  or  DISC ONE
-        disc_match = re.match(r"^DISC\s+(\w+)(?:\s+\((.+)\))?$", line)
+        # Boxset variant: DISC ONE "Back to the Future" (Blu-ray 4K)
+        disc_match = re.match(
+            r'^DISC\s+(\w+)(?:\s+"([^"]+)")?(?:\s+\((.+)\))?$',
+            line,
+        )
         if disc_match:
-            current_disc = Disc(
+            new_disc = Disc(
                 number=_disc_number(disc_match.group(1)),
-                format=disc_match.group(2) or "",
+                format=disc_match.group(3) or "",
+                title=(disc_match.group(2) or "").strip(),
             )
-            discs.append(current_disc)
+            # If we have a current disc with no features yet and the same
+            # number (e.g. an outer "DISC ONE" followed immediately by the
+            # quoted-title variant "DISC ONE \"Title\" (Format)"), replace
+            # the placeholder rather than emitting a duplicate.
+            if (
+                current_disc is not None
+                and not current_disc.features
+                and current_disc.number == new_disc.number
+                and discs
+                and discs[-1] is current_disc
+            ):
+                discs[-1] = new_disc
+            else:
+                discs.append(new_disc)
+            current_disc = new_disc
             current_group = None
             continue
 
