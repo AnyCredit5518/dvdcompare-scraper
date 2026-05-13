@@ -39,6 +39,11 @@ def _build_headers(*, referer: str | None = None) -> dict[str, str]:
     return headers
 
 
+# Public alias for callers (e.g. status pings) that need to reuse the same
+# headers without importing the underscore-prefixed name.
+build_browser_headers = _build_headers
+
+
 _TIMEOUT = httpx.Timeout(15.0)  # 15s connect + read timeout
 
 
