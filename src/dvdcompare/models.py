@@ -25,6 +25,11 @@ class Disc:
     is_film: bool = False
     title: str = ""
     features: list[Feature] = field(default_factory=list)
+    # For box-set placeholders that link to another film page
+    # (e.g. "DISCS ONE - FOUR: Season 1" -> fid=66231). Callers can
+    # opt into following these via ``get_film(..., resolve_pointers=True)``.
+    pointer_fid: int | None = None
+    pointer_url: str | None = None
 
 
 @dataclass

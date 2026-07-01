@@ -12,7 +12,6 @@ from dvdcompare.parser import (
     parse_runtime,
     parse_search_results,
 )
-
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
@@ -265,6 +264,107 @@ class TestParseExtras:
         # No leading dashes in any title
         for child in group.children:
             assert not child.title.startswith("-")
+
+    def test_disc_range_placeholders_expand(self):
+        """``DISCS ONE - FOUR: Season 1`` expands to four placeholder discs
+        that share the pointer_fid extracted from the anchor tag."""
+        html = (
+            '<a href="film.php?fid=66231">'
+            '<b>DISCS ONE - FOUR: Season 1</b></a><br>'
+            '<a href="film.php?fid=66232">'
+            '<b>DISCS FIVE - EIGHT: Season 2</b></a><br>'
+            '<b>DISC NINE (Blu-ray)</b><br>'
+            '* The Film<br>'
+        )
+        discs = parse_extras(html)
+        # 4 + 4 + 1 = 9
+        assert len(discs) == 9
+        assert [d.number for d in discs] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        for d in discs[:4]:
+            assert d.pointer_fid == 66231
+            assert d.title == "Season 1"
+            assert d.features == []
+        for d in discs[4:8]:
+            assert d.pointer_fid == 66232
+            assert d.title == "Season 2"
+        assert discs[8].pointer_fid is None
+        assert discs[8].is_film is True
+
+    def test_disc_range_with_hyphenated_words(self):
+        """``DISCS TWENTY-EIGHT - THIRTY: Season 8`` handles compound words."""
+        html = (
+            '<a href="/comparisons/film.php?fid=66238">'
+            '<b>DISCS TWENTY-EIGHT - THIRTY: Season 8</b></a><br>'
+        )
+        discs = parse_extras(html)
+        assert [d.number for d in discs] == [28, 29, 30]
+        for d in discs:
+            assert d.pointer_fid == 66238
+            assert d.title == "Season 8"
+
+    def test_disc_thirty_one_header_recognized(self):
+        """``DISC THIRTY-ONE`` (hyphenated compound past TEN) starts a disc."""
+        html = (
+            '<b>DISC THIRTY-ONE</b><br>'
+            '* The Film (88:10)<br>'
+            'Psych 2: Lassie Come Home (88:30)<br>'
+        )
+        discs = parse_extras(html)
+        assert len(discs) == 1
+        assert discs[0].number == 31
+        assert discs[0].is_film is True
+        assert len(discs[0].features) >= 2
+
+    def test_range_placeholder_replaced_by_full_disc_header(self):
+        """When a later ``DISC N`` header shows up for a slot that was
+        previously seeded by a range placeholder, the placeholder is
+        replaced (no duplicate disc number)."""
+        html = (
+            '<a href="film.php?fid=999">'
+            '<b>DISCS ONE - TWO: Season 1</b></a><br>'
+            '<b>DISC ONE (Blu-ray)</b><br>'
+            '* The Film<br>'
+        )
+        discs = parse_extras(html)
+        # Placeholder 1 replaced by rich header; placeholder 2 remains.
+        numbers = [d.number for d in discs]
+        assert 1 in numbers
+        assert 2 in numbers
+        # The disc numbered 1 now has features from the rich header.
+        disc_1 = next(d for d in discs if d.number == 1)
+        assert disc_1.format == "Blu-ray"
+        assert disc_1.is_film is True
+        assert disc_1.pointer_fid is None
+
+
+class TestDiscNumber:
+    """The ``_disc_number`` helper must accept hyphenated compounds."""
+
+    def test_single_words(self):
+        from dvdcompare.parser import _disc_number
+
+        assert _disc_number("ONE") == 1
+        assert _disc_number("TEN") == 10
+        assert _disc_number("TWENTY") == 20
+        assert _disc_number("THIRTY") == 30
+
+    def test_hyphenated(self):
+        from dvdcompare.parser import _disc_number
+
+        assert _disc_number("TWENTY-ONE") == 21
+        assert _disc_number("TWENTY-EIGHT") == 28
+        assert _disc_number("THIRTY-ONE") == 31
+
+    def test_digits(self):
+        from dvdcompare.parser import _disc_number
+
+        assert _disc_number("31") == 31
+
+    def test_unknown_returns_zero(self):
+        from dvdcompare.parser import _disc_number
+
+        assert _disc_number("BANANA") == 0
+        assert _disc_number("TWENTY-BANANA") == 0
 
 
 # ---------------------------------------------------------------------------

@@ -18,7 +18,27 @@ _DISC_WORDS = {
     "EIGHT": 8,
     "NINE": 9,
     "TEN": 10,
+    "ELEVEN": 11,
+    "TWELVE": 12,
+    "THIRTEEN": 13,
+    "FOURTEEN": 14,
+    "FIFTEEN": 15,
+    "SIXTEEN": 16,
+    "SEVENTEEN": 17,
+    "EIGHTEEN": 18,
+    "NINETEEN": 19,
+    "TWENTY": 20,
+    "THIRTY": 30,
+    "FORTY": 40,
+    "FIFTY": 50,
+    "SIXTY": 60,
+    "SEVENTY": 70,
+    "EIGHTY": 80,
+    "NINETY": 90,
 }
+
+# Sentinel used to smuggle ``fid=N`` link targets through tag stripping.
+_FID_SENTINEL_RE = re.compile(r"\x00FID:(\d+):([^\x00]*)\x00")
 
 
 def parse_runtime(s: str) -> int:
@@ -45,13 +65,33 @@ def format_runtime(seconds: int) -> str:
 
 
 def _disc_number(word: str) -> int:
-    word = word.upper()
+    """Convert a disc-number token into an integer.
+
+    Handles digits (``"31"``), single words (``"ONE"``, ``"THIRTY"``), and
+    hyphenated compounds (``"TWENTY-ONE"``, ``"THIRTY-ONE"``). Returns 0
+    when the token cannot be resolved.
+    """
+    word = word.strip().upper()
+    if not word:
+        return 0
     if word in _DISC_WORDS:
         return _DISC_WORDS[word]
     try:
         return int(word)
     except ValueError:
-        return 0
+        pass
+    if "-" in word:
+        total = 0
+        for part in word.split("-"):
+            part = part.strip()
+            if not part:
+                continue
+            if part in _DISC_WORDS:
+                total += _DISC_WORDS[part]
+            else:
+                return 0
+        return total
+    return 0
 
 
 def parse_feature_line(line: str) -> Feature:
@@ -121,10 +161,62 @@ def parse_feature_line(line: str) -> Feature:
     )
 
 
+def _inject_link_sentinels(extras_html: str) -> str:
+    """Rewrite ``<a href="...film.php?fid=NNN...">inner</a>`` tags so the
+    target fid survives blanket HTML tag stripping.
+
+    Each anchor is replaced with ``inner\x00FID:NNN:URL\x00``. The sentinel
+    is picked back out per-line after tags are stripped.
+    """
+    def _sub(match: re.Match[str]) -> str:
+        href = match.group(1)
+        inner = match.group(2)
+        fid_match = re.search(r"fid=(\d+)", href)
+        if not fid_match:
+            return inner
+        return f"{inner}\x00FID:{fid_match.group(1)}:{href}\x00"
+
+    return re.sub(
+        r'<a\s+[^>]*href="([^"]*film\.php\?fid=\d+[^"]*)"[^>]*>(.*?)</a>',
+        _sub,
+        extras_html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+
+def _extract_line_pointer(line: str) -> tuple[str, int | None, str | None]:
+    """Extract the first ``\\x00FID:NNN:URL\\x00`` sentinel from ``line``.
+
+    Returns ``(cleaned_line, fid, url)`` — ``fid`` and ``url`` are ``None``
+    when no sentinel is present.
+    """
+    match = _FID_SENTINEL_RE.search(line)
+    if not match:
+        return line, None, None
+    fid = int(match.group(1))
+    url = match.group(2) or None
+    cleaned = _FID_SENTINEL_RE.sub("", line).strip()
+    return cleaned, fid, url
+
+
+def _strip_all_sentinels(line: str) -> str:
+    return _FID_SENTINEL_RE.sub("", line).strip()
+
+
+# Range placeholder: "DISCS ONE - FOUR: Season 1" or "DISCS 1 - 4: Season 1".
+# The word range may be hyphenated ("DISCS TWENTY-EIGHT - THIRTY: Season 8").
+_DISC_RANGE_RE = re.compile(
+    r"^DISCS?\s+([A-Z0-9-]+)\s*[-–—]\s*([A-Z0-9-]+)(?:\s*:\s*(.+))?$",
+    re.IGNORECASE,
+)
+
+
 def parse_extras(extras_html: str) -> list[Disc]:
     """Parse the inner HTML of an extras description div into :class:`Disc` objects."""
+    # Preserve fid targets from anchor tags before stripping HTML.
+    prepared = _inject_link_sentinels(extras_html)
     # Replace <br> variants with newlines
-    text = re.sub(r"<br\s*/?>", "\n", extras_html)
+    text = re.sub(r"<br\s*/?>", "\n", prepared)
     # Remove all remaining HTML tags
     text = re.sub(r"<[^>]+>", "", text)
     # Decode HTML entities
@@ -140,13 +232,38 @@ def parse_extras(extras_html: str) -> list[Disc]:
         if not line:
             continue
 
-        # Disc header: DISC ONE (Blu-ray 4K)  or  DISC ONE
+        # Detect a link target attached to this line (via sentinel) before
+        # any other processing so we can hand it to placeholder disc handlers.
+        line_no_sentinel, line_fid, line_url = _extract_line_pointer(line)
+
+        # Range placeholder: "DISCS ONE - FOUR: Season 1"
+        range_match = _DISC_RANGE_RE.match(line_no_sentinel)
+        if range_match:
+            start = _disc_number(range_match.group(1))
+            end = _disc_number(range_match.group(2))
+            label = (range_match.group(3) or "").strip()
+            if start and end and end >= start:
+                for n in range(start, end + 1):
+                    placeholder = Disc(
+                        number=n,
+                        format="",
+                        title=label,
+                        pointer_fid=line_fid,
+                        pointer_url=line_url,
+                    )
+                    discs.append(placeholder)
+                current_disc = discs[-1]
+                current_group = None
+                continue
+
+        # Rich DISC header: DISC ONE (Blu-ray 4K)  or  DISC ONE
         # Boxset variant: DISC ONE "Back to the Future" (Blu-ray 4K)
         disc_match = re.match(
-            r'^DISC\s+(\w+)(?:\s+"([^"]+)")?(?:\s+\((.+)\))?$',
-            line,
+            r'^DISC\s+([A-Z0-9-]+)(?:\s+"([^"]+)")?(?:\s+\((.+)\))?$',
+            line_no_sentinel,
+            re.IGNORECASE,
         )
-        if disc_match:
+        if disc_match and _disc_number(disc_match.group(1)):
             new_disc = Disc(
                 number=_disc_number(disc_match.group(1)),
                 format=disc_match.group(3) or "",
@@ -154,21 +271,31 @@ def parse_extras(extras_html: str) -> list[Disc]:
             )
             # If we have a current disc with no features yet and the same
             # number (e.g. an outer "DISC ONE" followed immediately by the
-            # quoted-title variant "DISC ONE \"Title\" (Format)"), replace
-            # the placeholder rather than emitting a duplicate.
-            if (
-                current_disc is not None
-                and not current_disc.features
-                and current_disc.number == new_disc.number
-                and discs
-                and discs[-1] is current_disc
-            ):
-                discs[-1] = new_disc
-            else:
+            # quoted-title variant "DISC ONE \"Title\" (Format)"), or a
+            # range-placeholder we've already emitted for this number,
+            # replace it rather than emitting a duplicate.
+            replaced = False
+            for idx in range(len(discs) - 1, -1, -1):
+                candidate = discs[idx]
+                if candidate.number != new_disc.number:
+                    continue
+                if not candidate.features:
+                    discs[idx] = new_disc
+                    replaced = True
+                    break
+                # Existing disc at same number already has features —
+                # keep both to avoid data loss.
+                break
+            if not replaced:
                 discs.append(new_disc)
             current_disc = new_disc
             current_group = None
             continue
+
+        # From here on we treat the sentinel-stripped text as content: a
+        # trailing link to another film page has no semantic role for
+        # regular feature lines.
+        line = _strip_all_sentinels(line)
 
         # "* The Film" marker (possibly with a variant title suffix).
         # dvdcompare uses a leading asterisk to flag the main feature.

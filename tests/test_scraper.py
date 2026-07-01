@@ -2,8 +2,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from dvdcompare.models import FilmComparison, SearchResult
-from dvdcompare.scraper import find_film
+from dvdcompare.models import Disc, Feature, FilmComparison, Release, SearchResult
+from dvdcompare.scraper import _resolve_release_pointers, find_film, get_film
 
 
 @pytest.fixture
@@ -157,3 +157,160 @@ class TestFindFilmYear:
         ):
             result = await find_film("King Kong")
             assert result.film_id == 2451  # first in list
+
+
+
+def _make_placeholder_disc(number, pointer_fid, title=""):
+    return Disc(
+        number=number,
+        format="",
+        title=title,
+        pointer_fid=pointer_fid,
+        pointer_url=f"film.php?fid={pointer_fid}",
+    )
+
+
+def _make_target_film(fid, num_discs, features_per_disc=1):
+    """Build a FilmComparison whose first release has N discs, each with
+    a placeholder feature so they are not treated as empty placeholders."""
+    discs = []
+    for i in range(num_discs):
+        features = [
+            Feature(title=f"Feature {i}-{j}", runtime_seconds=60)
+            for j in range(features_per_disc)
+        ]
+        discs.append(Disc(number=i + 1, format="Blu-ray", features=features))
+    return FilmComparison(
+        title=f"Target {fid}",
+        film_id=fid,
+        releases=[Release(name=f"Release {fid}", discs=discs)],
+    )
+
+
+class TestResolveReleasePointers:
+    @pytest.mark.asyncio
+    async def test_range_pointers_replaced_by_target_discs(self):
+        """Four placeholders pointing to fid=66231 are replaced by that
+        release's four discs, renumbered to keep the outer sequence."""
+        outer = Release(
+            name="Complete Series",
+            discs=[_make_placeholder_disc(n, 66231, "Season 1") for n in range(1, 5)],
+        )
+        target = _make_target_film(66231, num_discs=4)
+
+        async def fake_get_film(fid, **kw):
+            assert fid == 66231
+            return target
+
+        with patch("dvdcompare.scraper.get_film", new_callable=AsyncMock, side_effect=fake_get_film):
+            await _resolve_release_pointers(outer, client=None, visited=set())
+
+        assert len(outer.discs) == 4
+        assert [d.number for d in outer.discs] == [1, 2, 3, 4]
+        # Real features, not pointer placeholders
+        assert all(d.features for d in outer.discs)
+        assert all(d.pointer_fid is None for d in outer.discs)
+        # Placeholder title propagated when target disc has no title
+        assert all(d.title == "Season 1" for d in outer.discs)
+
+    @pytest.mark.asyncio
+    async def test_multiple_pointer_groups_and_real_disc(self):
+        """Two pointer ranges + one rich disc: each range resolves, rich
+        disc stays untouched, and outer numbering stays contiguous."""
+        outer = Release(
+            name="Complete Series",
+            discs=[
+                _make_placeholder_disc(1, 66231, "Season 1"),
+                _make_placeholder_disc(2, 66231, "Season 1"),
+                _make_placeholder_disc(3, 66232, "Season 2"),
+                _make_placeholder_disc(4, 66232, "Season 2"),
+                Disc(number=5, format="Blu-ray", is_film=True, features=[Feature(title="The Film")]),
+            ],
+        )
+        s1 = _make_target_film(66231, num_discs=2)
+        s2 = _make_target_film(66232, num_discs=2)
+
+        async def fake_get_film(fid, **kw):
+            return {66231: s1, 66232: s2}[fid]
+
+        with patch("dvdcompare.scraper.get_film", new_callable=AsyncMock, side_effect=fake_get_film):
+            await _resolve_release_pointers(outer, client=None, visited=set())
+
+        assert [d.number for d in outer.discs] == [1, 2, 3, 4, 5]
+        assert outer.discs[4].is_film is True
+        assert outer.discs[4].features[0].title == "The Film"
+        assert all(d.pointer_fid is None for d in outer.discs)
+
+    @pytest.mark.asyncio
+    async def test_pointer_failure_leaves_placeholders(self):
+        """Network / parse errors from get_film must not blow up — the
+        placeholders are left in place instead."""
+        outer = Release(
+            name="Complete Series",
+            discs=[
+                _make_placeholder_disc(1, 66231, "Season 1"),
+                _make_placeholder_disc(2, 66231, "Season 1"),
+            ],
+        )
+
+        async def fake_get_film(fid, **kw):
+            raise RuntimeError("network down")
+
+        with patch("dvdcompare.scraper.get_film", new_callable=AsyncMock, side_effect=fake_get_film):
+            await _resolve_release_pointers(outer, client=None, visited=set())
+
+        assert len(outer.discs) == 2
+        assert all(d.pointer_fid == 66231 for d in outer.discs)
+
+    @pytest.mark.asyncio
+    async def test_cycle_detection(self):
+        """If a target fid is already in ``visited``, its placeholders are
+        left alone (no infinite recursion)."""
+        outer = Release(
+            name="Complete Series",
+            discs=[_make_placeholder_disc(1, 66231, "Season 1")],
+        )
+
+        async def fake_get_film(fid, **kw):
+            pytest.fail("get_film should not be called for cycle target")
+
+        with patch("dvdcompare.scraper.get_film", new_callable=AsyncMock, side_effect=fake_get_film):
+            await _resolve_release_pointers(outer, client=None, visited={66231})
+
+        assert len(outer.discs) == 1
+        assert outer.discs[0].pointer_fid == 66231
+
+    @pytest.mark.asyncio
+    async def test_get_film_resolve_pointers_flag_default_off(self):
+        """``get_film`` without ``resolve_pointers`` keeps placeholders."""
+        from dvdcompare.scraper import get_film_by_url
+
+        placeholder_film = FilmComparison(
+            title="Psych: The Movie",
+            film_id=66239,
+            releases=[
+                Release(
+                    name="Complete Series",
+                    discs=[_make_placeholder_disc(1, 66231, "Season 1")],
+                )
+            ],
+        )
+
+        class FakeResp:
+            content = b""
+            def raise_for_status(self):
+                pass
+
+        class FakeClient:
+            async def get(self, url, **kw):
+                return FakeResp()
+            async def aclose(self):
+                pass
+
+        with patch("dvdcompare.scraper.parse_film_page", return_value=placeholder_film):
+            film = await get_film_by_url(
+                "http://example/film.php?fid=66239",
+                client=FakeClient(),
+            )
+
+        assert film.releases[0].discs[0].pointer_fid == 66231

@@ -6,7 +6,7 @@ import random
 
 import httpx
 
-from .models import FilmComparison, SearchResult
+from .models import FilmComparison, Release, SearchResult
 from .parser import parse_film_page, parse_search_results
 
 BASE_URL = "https://www.dvdcompare.net"
@@ -82,6 +82,7 @@ async def find_film(
     *,
     year: int | None = None,
     client: httpx.AsyncClient | None = None,
+    resolve_pointers: bool = False,
 ) -> FilmComparison:
     """Search for a title and return the best-matching FilmComparison.
 
@@ -120,7 +121,12 @@ async def find_film(
         # Real browsers arrive at a film page via the search results, so
         # advertise that referer for the second request.
         referer = f"{BASE_URL}/comparisons/search.php"
-        return await get_film(best.film_id, client=client, referer=referer)
+        return await get_film(
+            best.film_id,
+            client=client,
+            referer=referer,
+            resolve_pointers=resolve_pointers,
+        )
     finally:
         if own_client:
             await client.aclose()
@@ -131,10 +137,22 @@ async def get_film(
     *,
     client: httpx.AsyncClient | None = None,
     referer: str | None = None,
+    resolve_pointers: bool = False,
 ) -> FilmComparison:
-    """Fetch and parse a film comparison page by dvdcompare film ID."""
+    """Fetch and parse a film comparison page by dvdcompare film ID.
+
+    When ``resolve_pointers`` is ``True``, box-set placeholder discs that
+    link to another film page (e.g. ``DISCS ONE - FOUR: Season 1``) are
+    followed and the returned page's discs are spliced in place of the
+    placeholders.
+    """
     url = f"{BASE_URL}/comparisons/film.php?fid={film_id}"
-    return await get_film_by_url(url, client=client, referer=referer)
+    return await get_film_by_url(
+        url,
+        client=client,
+        referer=referer,
+        resolve_pointers=resolve_pointers,
+    )
 
 
 async def get_film_by_url(
@@ -142,8 +160,12 @@ async def get_film_by_url(
     *,
     client: httpx.AsyncClient | None = None,
     referer: str | None = None,
+    resolve_pointers: bool = False,
 ) -> FilmComparison:
-    """Fetch and parse a film comparison page by full URL."""
+    """Fetch and parse a film comparison page by full URL.
+
+    See :func:`get_film` for ``resolve_pointers``.
+    """
     own_client = client is None
     if own_client:
         client = _new_client()
@@ -151,7 +173,115 @@ async def get_film_by_url(
         headers = {"Referer": referer} if referer else None
         resp = await client.get(url, headers=headers)
         resp.raise_for_status()
-        return parse_film_page(resp.content)
+        film = parse_film_page(resp.content)
+        if resolve_pointers:
+            visited: set[int] = set()
+            if film.film_id is not None:
+                visited.add(film.film_id)
+            for release in film.releases:
+                await _resolve_release_pointers(
+                    release,
+                    client=client,
+                    visited=visited,
+                    referer=url,
+                )
+        return film
     finally:
         if own_client:
             await client.aclose()
+
+
+async def _resolve_release_pointers(
+    release: "Release",
+    *,
+    client: httpx.AsyncClient,
+    visited: set[int],
+    referer: str | None = None,
+) -> None:
+    """Replace pointer-only placeholder discs in ``release`` with the discs
+    from the film pages they link to.
+
+    Consecutive placeholders sharing the same ``pointer_fid`` are grouped
+    and replaced together with the target release's discs. Discs that
+    already have features, that lack a pointer, or whose pointer would
+    cause a cycle are left untouched.
+    """
+    new_discs = []
+    i = 0
+    while i < len(release.discs):
+        d = release.discs[i]
+        should_follow = (
+            d.pointer_fid is not None
+            and not d.features
+            and d.pointer_fid not in visited
+        )
+        if not should_follow:
+            new_discs.append(d)
+            i += 1
+            continue
+
+        # Group consecutive discs pointing to the same fid.
+        target_fid = d.pointer_fid
+        j = i
+        while (
+            j < len(release.discs)
+            and release.discs[j].pointer_fid == target_fid
+            and not release.discs[j].features
+        ):
+            j += 1
+        placeholders = release.discs[i:j]
+
+        try:
+            target = await get_film(
+                target_fid,
+                client=client,
+                referer=referer,
+                resolve_pointers=False,
+            )
+        except Exception:
+            # Network / parse failure — leave placeholders in place so the
+            # caller still sees the disc structure derived from the top
+            # page. This is deliberately permissive: pointer resolution is
+            # best-effort.
+            new_discs.extend(placeholders)
+            i = j
+            continue
+
+        visited.add(target_fid)
+        target_release = _pick_matching_release(target, release)
+        if target_release is None or not target_release.discs:
+            new_discs.extend(placeholders)
+            i = j
+            continue
+
+        # Renumber the target discs to match the placeholder positions so
+        # downstream consumers see contiguous disc numbers on the outer
+        # release.
+        base_num = placeholders[0].number or (len(new_discs) + 1)
+        for k, td in enumerate(target_release.discs):
+            td.number = base_num + k
+            # Preserve the placeholder's label (e.g. "Season 1") when the
+            # target disc has no title of its own.
+            if not td.title and placeholders and placeholders[0].title:
+                td.title = placeholders[0].title
+            new_discs.append(td)
+        i = j
+
+    release.discs = new_discs
+
+
+def _pick_matching_release(
+    target: FilmComparison, outer: "Release"
+) -> "Release | None":
+    """Choose the release on ``target`` that best matches ``outer``.
+
+    Prefers a release with the same year; falls back to the first
+    release. Returns ``None`` when the target has no releases.
+    """
+    if not target.releases:
+        return None
+    if outer.year:
+        for r in target.releases:
+            if r.year == outer.year:
+                return r
+    return target.releases[0]
