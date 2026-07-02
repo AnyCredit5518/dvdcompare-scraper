@@ -314,3 +314,150 @@ class TestResolveReleasePointers:
             )
 
         assert film.releases[0].discs[0].pointer_fid == 66231
+
+    @pytest.mark.asyncio
+    async def test_target_release_placeholder_discs_are_dropped(self):
+        """Season pages typically re-list the whole box (e.g. Season 1's page
+        has 4 real Season 1 discs plus placeholder pointers for Seasons 2-8).
+        Only the concrete discs should be spliced in; the nested placeholders
+        must be dropped to avoid multiplying the outer disc count.
+        """
+        # Outer: 4 placeholders for Season 1 + 4 for Season 2.
+        outer = Release(
+            name="Complete Series",
+            discs=[
+                _make_placeholder_disc(1, 66231, "Season 1"),
+                _make_placeholder_disc(2, 66231, "Season 1"),
+                _make_placeholder_disc(3, 66231, "Season 1"),
+                _make_placeholder_disc(4, 66231, "Season 1"),
+                _make_placeholder_disc(5, 66232, "Season 2"),
+                _make_placeholder_disc(6, 66232, "Season 2"),
+                _make_placeholder_disc(7, 66232, "Season 2"),
+                _make_placeholder_disc(8, 66232, "Season 2"),
+            ],
+        )
+        # Season 1 target: 4 concrete Season 1 discs, then 4 pointer
+        # placeholders for Season 2 (this mirrors the real dvdcompare page).
+        season1 = FilmComparison(
+            title="Psych: Season 1",
+            film_id=66231,
+            releases=[
+                Release(
+                    name="Complete Series",
+                    discs=[
+                        Disc(number=1, format="Blu-ray", features=[Feature(title="S1D1")]),
+                        Disc(number=2, format="Blu-ray", features=[Feature(title="S1D2")]),
+                        Disc(number=3, format="Blu-ray", features=[Feature(title="S1D3")]),
+                        Disc(number=4, format="Blu-ray", features=[Feature(title="S1D4")]),
+                        _make_placeholder_disc(5, 66232, "Season 2"),
+                        _make_placeholder_disc(6, 66232, "Season 2"),
+                        _make_placeholder_disc(7, 66232, "Season 2"),
+                        _make_placeholder_disc(8, 66232, "Season 2"),
+                    ],
+                )
+            ],
+        )
+        # Season 2 target: same shape.
+        season2 = FilmComparison(
+            title="Psych: Season 2",
+            film_id=66232,
+            releases=[
+                Release(
+                    name="Complete Series",
+                    discs=[
+                        _make_placeholder_disc(1, 66231, "Season 1"),
+                        _make_placeholder_disc(2, 66231, "Season 1"),
+                        _make_placeholder_disc(3, 66231, "Season 1"),
+                        _make_placeholder_disc(4, 66231, "Season 1"),
+                        Disc(number=5, format="Blu-ray", features=[Feature(title="S2D1")]),
+                        Disc(number=6, format="Blu-ray", features=[Feature(title="S2D2")]),
+                        Disc(number=7, format="Blu-ray", features=[Feature(title="S2D3")]),
+                        Disc(number=8, format="Blu-ray", features=[Feature(title="S2D4")]),
+                    ],
+                )
+            ],
+        )
+
+        async def fake_get_film(fid, **kw):
+            return {66231: season1, 66232: season2}[fid]
+
+        with patch("dvdcompare.scraper.get_film", new_callable=AsyncMock, side_effect=fake_get_film):
+            await _resolve_release_pointers(outer, client=None, visited=set())
+
+        # Result: 8 concrete discs, not 8 + 4 + 4 = 16, and not 8 * 2 = 16.
+        assert len(outer.discs) == 8
+        assert [d.number for d in outer.discs] == [1, 2, 3, 4, 5, 6, 7, 8]
+        assert all(d.pointer_fid is None for d in outer.discs)
+        titles = [d.features[0].title for d in outer.discs]
+        assert titles == ["S1D1", "S1D2", "S1D3", "S1D4", "S2D1", "S2D2", "S2D3", "S2D4"]
+
+    @pytest.mark.asyncio
+    async def test_target_with_only_placeholders_leaves_outer_placeholders(self):
+        """If the target release is nothing but placeholders (nothing
+        concrete to splice), the outer placeholders are preserved so the
+        caller still sees the disc slots."""
+        outer = Release(
+            name="Complete Series",
+            discs=[
+                _make_placeholder_disc(1, 66231, "Season 1"),
+                _make_placeholder_disc(2, 66231, "Season 1"),
+            ],
+        )
+        # Target only re-lists other seasons as placeholders — no real discs.
+        empty_target = FilmComparison(
+            title="Empty",
+            film_id=66231,
+            releases=[
+                Release(
+                    name="Complete Series",
+                    discs=[
+                        _make_placeholder_disc(1, 66232, "Season 2"),
+                        _make_placeholder_disc(2, 66233, "Season 3"),
+                    ],
+                )
+            ],
+        )
+
+        async def fake_get_film(fid, **kw):
+            return empty_target
+
+        with patch("dvdcompare.scraper.get_film", new_callable=AsyncMock, side_effect=fake_get_film):
+            await _resolve_release_pointers(outer, client=None, visited=set())
+
+        assert len(outer.discs) == 2
+        assert all(d.pointer_fid == 66231 for d in outer.discs)
+
+
+    @pytest.mark.asyncio
+    async def test_target_release_truncated_to_placeholder_count(self):
+        """When the season page ships more discs than the outer range
+        allocates (e.g. standalone boxset has 5 discs but the Complete
+        Series slots 4), only the first N discs are spliced in so the
+        outer numbering stays intact."""
+        outer = Release(
+            name="Complete Series",
+            discs=[_make_placeholder_disc(n, 66231, "Season 1") for n in range(1, 5)],
+        )
+        # Target has 5 real discs but outer only has 4 placeholder slots.
+        big_target = FilmComparison(
+            title="Season 1 Standalone",
+            film_id=66231,
+            releases=[
+                Release(
+                    name="C",
+                    discs=[
+                        Disc(number=1, format="BD", features=[Feature(title=f"D{n}")])
+                        for n in range(1, 6)
+                    ],
+                )
+            ],
+        )
+
+        async def fake_get_film(fid, **kw):
+            return big_target
+
+        with patch("dvdcompare.scraper.get_film", new_callable=AsyncMock, side_effect=fake_get_film):
+            await _resolve_release_pointers(outer, client=None, visited=set())
+
+        assert [d.number for d in outer.discs] == [1, 2, 3, 4]
+        assert [d.features[0].title for d in outer.discs] == ["D1", "D2", "D3", "D4"]

@@ -254,11 +254,28 @@ async def _resolve_release_pointers(
             i = j
             continue
 
+        # Season pages typically re-list the whole box (e.g. Season 1's page
+        # has 4 real Season 1 discs plus placeholder pointers for Seasons
+        # 2-8). Keep only concrete discs — placeholders would blow up the
+        # outer disc count on every season and their content is already
+        # reached via the outer release's own placeholders.
+        target_discs = [td for td in target_release.discs if td.pointer_fid is None]
+        if not target_discs:
+            new_discs.extend(placeholders)
+            i = j
+            continue
+
+        # The season page's release may still carry more discs than the outer
+        # range slot allocates (a standalone boxset often ships an extra
+        # bonus disc that the Complete Series consolidates away). Trim to
+        # the placeholder range so the outer disc numbering stays correct.
+        target_discs = target_discs[: len(placeholders)]
+
         # Renumber the target discs to match the placeholder positions so
         # downstream consumers see contiguous disc numbers on the outer
         # release.
         base_num = placeholders[0].number or (len(new_discs) + 1)
-        for k, td in enumerate(target_release.discs):
+        for k, td in enumerate(target_discs):
             td.number = base_num + k
             # Preserve the placeholder's label (e.g. "Season 1") when the
             # target disc has no title of its own.
