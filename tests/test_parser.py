@@ -315,6 +315,47 @@ class TestParseExtras:
         assert discs[0].is_film is True
         assert len(discs[0].features) >= 2
 
+    def test_feature_captures_link_target_fid(self):
+        """When a bonus feature title is wrapped in ``<a href="film.php?fid=…">``,
+        the resulting ``Feature`` carries the target fid/url.
+
+        This is dvdcompare's convention for a bonus feature whose "real
+        home" is a different film page — e.g. disc-31 of a Complete Series
+        set lists three standalone TV-movie sequels, each linked to its
+        own dvdcompare entry.
+        """
+        html = (
+            '<b>DISC THIRTY-ONE</b><br>'
+            '* <a href="film.php?fid=66239">Psych: The Movie</a> (88:10)<br>'
+            '* <a href="film.php?fid=66240">Psych 2: Lassie Come Home</a> (88:30)<br>'
+            '* <a href="film.php?fid=66241">Psych 3: This Is Gus</a> (96:22)<br>'
+        )
+        discs = parse_extras(html)
+        assert len(discs) == 1
+        disc = discs[0]
+        assert disc.number == 31
+        assert len(disc.features) == 3
+        assert disc.features[0].title == "Psych: The Movie"
+        assert disc.features[0].pointer_fid == 66239
+        assert disc.features[0].pointer_url is not None
+        assert "fid=66239" in disc.features[0].pointer_url
+        assert disc.features[0].runtime_seconds == 88 * 60 + 10
+        assert disc.features[1].pointer_fid == 66240
+        assert disc.features[2].pointer_fid == 66241
+
+    def test_feature_without_link_has_no_pointer(self):
+        """Feature lines without an anchor keep ``pointer_fid=None``."""
+        html = (
+            '<b>DISC ONE (Blu-ray)</b><br>'
+            '* The Film (120:00)<br>'
+            'Making Of (30:00)<br>'
+        )
+        discs = parse_extras(html)
+        disc = discs[0]
+        for feat in disc.features:
+            assert feat.pointer_fid is None
+            assert feat.pointer_url is None
+
     def test_range_placeholder_replaced_by_full_disc_header(self):
         """When a later ``DISC N`` header shows up for a slot that was
         previously seeded by a range placeholder, the placeholder is

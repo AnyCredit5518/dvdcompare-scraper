@@ -14,6 +14,14 @@ class Feature:
     technical_notes: str | None = None
     is_play_all: bool = False
     children: list[Feature] = field(default_factory=list)
+    # When the feature title was wrapped in a ``<a href="film.php?fid=…">``
+    # anchor on the source page, these carry the target fid and href.
+    # dvdcompare uses this to indicate a bonus/extra whose "real" home is
+    # a different film page (e.g. disc-31 of a Complete Series set linking
+    # each standalone movie to its own dvdcompare entry). Callers can use
+    # the fid to fetch canonical title/year and split organize targets.
+    pointer_fid: int | None = None
+    pointer_url: str | None = None
 
 
 @dataclass

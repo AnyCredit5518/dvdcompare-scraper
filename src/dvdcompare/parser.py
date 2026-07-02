@@ -292,9 +292,12 @@ def parse_extras(extras_html: str) -> list[Disc]:
             current_group = None
             continue
 
-        # From here on we treat the sentinel-stripped text as content: a
-        # trailing link to another film page has no semantic role for
-        # regular feature lines.
+        # From here on we treat the sentinel-stripped text as content
+        # for parsing but retain ``line_fid``/``line_url`` so the parsed
+        # Feature can record the link target — dvdcompare wraps a bonus
+        # feature title in ``<a href="film.php?fid=…">`` when that item
+        # is the main feature of a different work (e.g. disc-31 of a
+        # Complete Series set linking each bonus film to its own page).
         line = _strip_all_sentinels(line)
 
         # "* The Film" marker (possibly with a variant title suffix).
@@ -329,6 +332,8 @@ def parse_extras(extras_html: str) -> list[Disc]:
         dash_match = re.match(r"^(-{1,3})\s+", line)
         if dash_match:
             feature = parse_feature_line(line[dash_match.end():])
+            feature.pointer_fid = line_fid
+            feature.pointer_url = line_url
             if current_group:
                 current_group.children.append(feature)
             else:
@@ -336,6 +341,8 @@ def parse_extras(extras_html: str) -> list[Disc]:
             continue
 
         feature = parse_feature_line(line)
+        feature.pointer_fid = line_fid
+        feature.pointer_url = line_url
         current_disc.features.append(feature)
 
         # Detect group header (trailing colon or play-all)
